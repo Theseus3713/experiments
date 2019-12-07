@@ -15,16 +15,59 @@ type Node interface {
 	NodeCounts() (nodeCount, nilCount int)
 }
 
-type LeafNode struct{}
-
-func (leaf *LeafNode) AddRandom(node Node) {
-	//panic(`ERROR: You tried to add a node to a leaf node`)
-	fmt.Println(` add a node to a leaf node`)
+type BaseNode struct {
+	Parent   Node
+	Children []Node
 }
 
-func (leaf *LeafNode) NodeCounts() (nodeCount, nilCount int) {
-	return 1, 0
+type OpLerp struct {
+	BaseNode
 }
+
+func (op *OpLerp) Eval(x, y float32) float32 {
+	var (
+		a   = op.Children[0].Eval(x, y)
+		b   = op.Children[1].Eval(x, y)
+		pct = op.Children[2].Eval(x, y)
+	)
+	return a + pct*(b-a)
+}
+
+func (op *OpLerp) String() string {
+	return fmt.Sprint("( Lerp %s %s )", op.Children[1].String(), op.Children[2].String())
+}
+
+type OpClip struct {
+	BaseNode
+}
+
+func (op *OpClip) Eval(x, y float32) float32 {
+	var (
+		value = op.Children[0].Eval(X, y)
+		max   = float32(math.Abs(float64(op.Children[1].Eval(x, y))))
+	)
+	if value > max {
+		return max
+	} else if value < -max {
+		return -max
+	}
+	return value
+}
+
+func (op *OpClip) String() string {
+	return fmt.Sprint("( Clip %s %s )", op.Children[0].String(), op.Children[1].String())
+}
+
+//type LeafNode struct{}
+
+//func (leaf *LeafNode) AddRandom(node Node) {
+//	//panic(`ERROR: You tried to add a node to a leaf node`)
+//	fmt.Println(` add a node to a leaf node`)
+//}
+//
+//func (leaf *LeafNode) NodeCounts() (nodeCount, nilCount int) {
+//	return 1, 0
+//}
 
 type SingleNode struct {
 	Child Node
@@ -87,7 +130,7 @@ func (double *DoubleNode) NodeCounts() (nodeCount, nilCount int) {
 }
 
 type OpSin struct {
-	SingleNode
+	BaseNode
 }
 
 func (op *OpSin) Eval(x, y float32) float32 {
