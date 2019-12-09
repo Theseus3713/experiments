@@ -7,18 +7,31 @@ import (
 )
 
 type GameUI interface {
-	DrawThenGetInput(*Level) Input
+	Draw(*Level)
+	GetInput() *Input
 }
 
+type InputType int
+
+const (
+	None InputType = iota
+	Up
+	Down
+	Left
+	Right
+	Quit
+)
+
 type Input struct {
-	up, down, left, right bool
+	Type InputType
 }
 type Title rune
 
 const (
 	StoneWall Title = '#'
 	DirtFloor Title = '.'
-	Door      Title = '|'
+	CloseDoor Title = '|'
+	OpenDoor  Title = '/'
 	Blank     Title = 0
 	Pending   Title = -1
 )
@@ -72,7 +85,9 @@ func loadLevelFromFile(fileName string) *Level {
 			case '#':
 				t = StoneWall
 			case '|':
-				t = Door
+				t = CloseDoor
+			case '/':
+				t = OpenDoor
 			case '.':
 				t = DirtFloor
 			case 'P':
@@ -107,9 +122,60 @@ func loadLevelFromFile(fileName string) *Level {
 
 }
 
+func canWalk(level *Level, x, y int) bool {
+	switch level.Map[y][x] {
+	case StoneWall, CloseDoor, Blank:
+		return false
+	default:
+		return true
+	}
+}
+
+func checkDoor(level *Level, x, y int) {
+	if level.Map[y][x] == CloseDoor {
+		level.Map[y][x] = OpenDoor
+	}
+}
+
+func handleInput(level *Level, input *Input) {
+	var player = level.Player
+	switch input.Type {
+	case Up:
+		if canWalk(level, player.X, player.Y-1) {
+			level.Player.Y--
+		} else {
+			checkDoor(level, player.X, player.Y-1)
+		}
+	case Down:
+		if canWalk(level, player.X, player.Y+1) {
+			level.Player.Y++
+		} else {
+			checkDoor(level, player.X, player.Y+1)
+		}
+	case Left:
+		if canWalk(level, player.X-1, player.Y) {
+			level.Player.X--
+		} else {
+			checkDoor(level, player.X-1, player.Y)
+		}
+	case Right:
+		if canWalk(level, player.X+1, player.Y) {
+			level.Player.X++
+		} else {
+			checkDoor(level, player.X+1, player.Y)
+		}
+	}
+}
+
 func Run(ui GameUI) {
 	var level = loadLevelFromFile("C:/Users/xpoc_/go/src/experiments/experiments/RPG/game/maps/level_1.map")
 	for {
-		_ = ui.DrawThenGetInput(level)
+		ui.Draw(level)
+		input := ui.GetInput()
+
+		if input.Type == Quit {
+			return
+		}
+		handleInput(level, input)
 	}
 }

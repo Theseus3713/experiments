@@ -18,9 +18,14 @@ const (
 )
 
 var (
-	renderer     *sdl.Renderer
-	textureAtlas *sdl.Texture
-	textureIndex map[game.Title][]sdl.Rect
+	renderer          *sdl.Renderer
+	textureAtlas      *sdl.Texture
+	textureIndex      map[game.Title][]sdl.Rect
+	keyboardState     []uint8
+	prevKeyboardState []uint8
+
+	centerX int
+	centerY int
 )
 
 func loadTextureIndex(fileName string) {
@@ -139,12 +144,40 @@ func init() {
 
 	textureAtlas = imgFileToTexture("C:/Users/xpoc_/go/src/experiments/experiments/RPG/ui2d/assets/tiles.png")
 	loadTextureIndex("C:/Users/xpoc_/go/src/experiments/experiments/RPG/ui2d/assets/atlas-index.txt")
+	keyboardState = sdl.GetKeyboardState()
+	prevKeyboardState = make([]uint8, len(keyboardState))
+	for i, v := range keyboardState {
+		prevKeyboardState[i] = v
+	}
+
+	centerX = -1
+	centerY = -1
 }
 
 type UI2d struct {
 }
 
-func (ui *UI2d) DrawThenGetInput(level *game.Level) game.Input {
+func (ui *UI2d) Draw(level *game.Level) {
+	if centerX == -1 && centerY == -1 {
+		centerY = level.Player.Y
+		centerX = level.Player.X
+	}
+	// центрирование камеры
+	var limit = 5
+	if level.Player.X > centerX+limit {
+		centerX++
+	} else if level.Player.X < centerX-limit {
+		centerX--
+	} else if level.Player.Y > centerY+limit {
+		centerY++
+	} else if level.Player.Y < centerY-limit {
+		centerY--
+	}
+	var (
+		offsetX = int32((windowWidth / 2) - centerX*32)
+		offsetY = int32((windowHeight / 2) - centerY*32)
+	)
+	renderer.Clear()
 	rand.Seed(1)
 	for y, row := range level.Map {
 		for x, tile := range row {
@@ -154,17 +187,48 @@ func (ui *UI2d) DrawThenGetInput(level *game.Level) game.Input {
 			var (
 				scrRects = textureIndex[tile]
 				scrRect  = scrRects[rand.Intn(len(scrRects))]
-				dstRect  = sdl.Rect{int32(x * 32), int32(y * 32), 32, 32}
+				dstRect  = sdl.Rect{int32(x*32) + offsetX, int32(y*32) + offsetY, 32, 32}
 			)
 			renderer.Copy(textureAtlas, &scrRect, &dstRect)
 		}
 	}
 
-	if err := renderer.Copy(textureAtlas, &sdl.Rect{21 * 32, 59 * 32, 32, 32}, &sdl.Rect{int32(level.Player.X) * 32, int32(level.Player.Y) * 32, 32, 32}); err != nil {
+	if err := renderer.Copy(textureAtlas, &sdl.Rect{21 * 32, 59 * 32, 32, 32}, &sdl.Rect{int32(level.Player.X)*32 + offsetX, int32(level.Player.Y)*32 + offsetY, 32, 32}); err != nil {
 		panic(err)
 	}
 	renderer.Present()
-	for {
+}
 
+func (ui *UI2d) GetInput() *game.Input {
+	for {
+		for event := sdl.PollEvent(); event != nil; event = sdl.PollEvent() {
+			switch event.(type) {
+			case *sdl.QuitEvent:
+				return &game.Input{Type: game.Quit}
+
+			}
+		}
+
+		var input game.Input
+		if keyboardState[sdl.SCANCODE_UP] == 0 && prevKeyboardState[sdl.SCANCODE_UP] != 0 {
+			input.Type = game.Up
+		}
+		if keyboardState[sdl.SCANCODE_DOWN] == 0 && prevKeyboardState[sdl.SCANCODE_DOWN] != 0 {
+			input.Type = game.Down
+		}
+		if keyboardState[sdl.SCANCODE_LEFT] == 0 && prevKeyboardState[sdl.SCANCODE_LEFT] != 0 {
+			input.Type = game.Left
+		}
+		if keyboardState[sdl.SCANCODE_RIGHT] == 0 && prevKeyboardState[sdl.SCANCODE_RIGHT] != 0 {
+			input.Type = game.Right
+		}
+
+		for i, v := range keyboardState {
+			prevKeyboardState[i] = v
+		}
+
+		if input.Type != game.None {
+			return &input
+		}
 	}
 }
