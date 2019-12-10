@@ -3,12 +3,23 @@ package game
 import (
 	"bufio"
 	"fmt"
+	"math"
 	"os"
 )
 
-type GameUI interface {
-	Draw(*Level)
-	GetInput() *Input
+type Game struct {
+	LevelChans []chan *Level
+	InputChan  chan *Input
+	Level      *Level
+}
+
+func NewGame(numWindows int, path string) *Game {
+	levelChans := make([]chan *Level, numWindows)
+	for i := range levelChans {
+		levelChans[i] = make(chan *Level)
+	}
+	inputChan := make(chan *Input)
+	return &Game{levelChans, inputChan, loadLevelFromFile(path)}
 }
 
 type InputType int
@@ -19,11 +30,14 @@ const (
 	Down
 	Left
 	Right
-	Quit
+	QuitGame
+	CloseWindow
+	Search //temporary
 )
 
 type Input struct {
-	Type InputType
+	Type         InputType
+	LevelChannel chan *Level
 }
 type Title rune
 
@@ -39,14 +53,19 @@ const (
 type Level struct {
 	Map [][]Title
 	Player
+	Debug map[Position]bool
 }
 
 type Player struct {
 	Entity
 }
 
-type Entity struct {
+type Position struct {
 	X, Y int
+}
+
+type Entity struct {
+	Position
 }
 
 func loadLevelFromFile(fileName string) *Level {
@@ -122,8 +141,8 @@ func loadLevelFromFile(fileName string) *Level {
 
 }
 
-func canWalk(level *Level, x, y int) bool {
-	switch level.Map[y][x] {
+func canWalk(level *Level, pos Position) bool {
+	switch level.Map[pos.Y][pos.X] {
 	case StoneWall, CloseDoor, Blank:
 		return false
 	default:
@@ -131,51 +150,165 @@ func canWalk(level *Level, x, y int) bool {
 	}
 }
 
-func checkDoor(level *Level, x, y int) {
-	if level.Map[y][x] == CloseDoor {
-		level.Map[y][x] = OpenDoor
+func checkDoor(level *Level, pos Position) {
+	if level.Map[pos.Y][pos.X] == CloseDoor {
+		level.Map[pos.Y][pos.X] = OpenDoor
 	}
 }
 
-func handleInput(level *Level, input *Input) {
-	var player = level.Player
+func (game *Game) handleInput(input *Input) {
+	var player = game.Level.Player
 	switch input.Type {
 	case Up:
-		if canWalk(level, player.X, player.Y-1) {
-			level.Player.Y--
+		if canWalk(game.Level, Position{player.X, player.Y - 1}) {
+			game.Level.Player.Y--
 		} else {
-			checkDoor(level, player.X, player.Y-1)
+			checkDoor(game.Level, Position{player.X, player.Y - 1})
 		}
 	case Down:
-		if canWalk(level, player.X, player.Y+1) {
-			level.Player.Y++
+		if canWalk(game.Level, Position{player.X, player.Y + 1}) {
+			game.Level.Player.Y++
 		} else {
-			checkDoor(level, player.X, player.Y+1)
+			checkDoor(game.Level, Position{player.X, player.Y + 1})
 		}
 	case Left:
-		if canWalk(level, player.X-1, player.Y) {
-			level.Player.X--
+		if canWalk(game.Level, Position{player.X - 1, player.Y}) {
+			game.Level.Player.X--
 		} else {
-			checkDoor(level, player.X-1, player.Y)
+			checkDoor(game.Level, Position{player.X - 1, player.Y})
 		}
 	case Right:
-		if canWalk(level, player.X+1, player.Y) {
-			level.Player.X++
+		if canWalk(game.Level, Position{player.X + 1, player.Y}) {
+			game.Level.Player.X++
 		} else {
-			checkDoor(level, player.X+1, player.Y)
+			checkDoor(game.Level, Position{player.X + 1, player.Y})
+		}
+	case Search:
+		//bfs(ui, level, player.Position)
+		game.astar(player.Position, Position{3, 2})
+	case CloseWindow:
+		close(input.LevelChannel)
+		chanIndex := 0
+		for i, c := range game.LevelChans {
+			if input.LevelChannel == c {
+				chanIndex = i
+				break
+			}
+		}
+		game.LevelChans = append(game.LevelChans[:chanIndex], game.LevelChans[chanIndex+1:]...)
+
+	}
+}
+
+func getNeighbors(level *Level, pos Position) []Position {
+	var (
+		neighbors = make([]Position, 0, 4)
+		left      = Position{pos.X - 1, pos.Y}
+		right     = Position{pos.X + 1, pos.Y}
+		up        = Position{pos.X, pos.Y - 1}
+		down      = Position{pos.X, pos.Y + 1}
+	)
+	if canWalk(level, right) {
+		neighbors = append(neighbors, right)
+	}
+	if canWalk(level, left) {
+		neighbors = append(neighbors, left)
+	}
+	if canWalk(level, up) {
+		neighbors = append(neighbors, up)
+	}
+	if canWalk(level, down) {
+		neighbors = append(neighbors, down)
+	}
+	return neighbors
+}
+
+func (game *Game) bfs(start Position) {
+	var frontier = make([]Position, 0, 8)
+	frontier = append(frontier, start)
+	var visited = make(map[Position]bool)
+	visited[start] = true
+	game.Level.Debug = visited
+
+	for len(frontier) > 0 {
+		var current = frontier[0]
+		frontier = frontier[1:]
+		for _, next := range getNeighbors(game.Level, current) {
+			if !visited[next] {
+				frontier = append(frontier, next)
+				visited[next] = true
+			}
 		}
 	}
 }
 
-func Run(ui GameUI) {
-	var level = loadLevelFromFile("C:/Users/xpoc_/go/src/experiments/experiments/RPG/game/maps/level_1.map")
-	for {
-		ui.Draw(level)
-		input := ui.GetInput()
+func (game *Game) astar(start, goal Position) []Position {
+	var frontier = make(pQueue, 0, 8)
+	frontier = frontier.push(start, 1)
+	//frontier = append(frontier, priorityPosition{start, 1})
+	var cameFrom = make(map[Position]Position)
+	cameFrom[start] = start
+	var costSoFor = make(map[Position]int)
+	costSoFor[start] = 0
 
-		if input.Type == Quit {
+	game.Level.Debug = make(map[Position]bool)
+	var current Position
+	for len(frontier) > 0 {
+		frontier, current = frontier.pop()
+		if current == goal {
+			var path = make([]Position, 0)
+			var pos = current
+			for pos != start {
+				path = append(path, pos)
+				pos = cameFrom[pos]
+			}
+			path = append(path, pos)
+
+			// Инверсия [3,2,1] = [1,2,3]
+			for i, j := 0, len(path)-1; i < j; i, j = i+1, j-1 {
+				path[i], path[j] = path[j], path[i]
+			}
+
+			for _, pos := range path {
+				game.Level.Debug[pos] = true
+			}
+			return path
+		}
+		for _, next := range getNeighbors(game.Level, current) {
+			var newCost = costSoFor[current] + 1 // always 1 for now
+			if _, ok := costSoFor[next]; !ok || newCost < costSoFor[next] {
+				costSoFor[next] = newCost
+				var (
+					xDist    = int(math.Abs(float64(goal.X - next.X)))
+					yDist    = int(math.Abs(float64(goal.Y - next.Y)))
+					priority = newCost + xDist + yDist
+				)
+				frontier = frontier.push(next, priority)
+				cameFrom[next] = current
+
+			}
+		}
+	}
+	return nil
+}
+
+func (game *Game) Run() {
+	fmt.Println("Starting...")
+
+	for _, lChan := range game.LevelChans {
+		lChan <- game.Level
+	}
+	for input := range game.InputChan {
+		if input.Type == QuitGame {
 			return
 		}
-		handleInput(level, input)
+		if input.Type == CloseWindow {
+			// TODO 	windows.Close() fd Handle in ui
+			return
+		}
+		game.handleInput(input)
+		for _, lChan := range game.LevelChans {
+			lChan <- game.Level
+		}
 	}
 }
