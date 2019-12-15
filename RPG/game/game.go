@@ -51,13 +51,62 @@ const (
 )
 
 type Level struct {
-	Map [][]Title
-	Player
-	Debug map[Position]bool
+	Map           [][]Title
+	Player        *Player
+	Monsters      map[Position]*Monster
+	Debug         map[Position]bool
+	Events        []string
+	EventPosition int
 }
 
 type Player struct {
-	Entity
+	Character
+}
+
+type Attackable interface {
+	GetActionPints() float64
+	SetActionPints(float64)
+	GetHitpoints() int
+	SetHitpoints(int)
+	GetAttackPower() int
+}
+
+func (c *Character) GetActionPints() float64 {
+	return c.ActionPoints
+}
+
+func (c *Character) SetActionPints(ap float64) {
+	c.ActionPoints = ap
+}
+
+func (c *Character) GetHitpoints() int {
+	return c.Hitpoints
+}
+
+func (c *Character) SetHitpoints(hp int) {
+	c.Hitpoints = hp
+}
+
+func (c *Character) GetAttackPower() int {
+	return c.Strength
+}
+
+func Attack(a1, a2 Attackable) {
+	a1.SetActionPints(a1.GetActionPints() - 1)
+	a2.SetHitpoints(a2.GetHitpoints() - a1.GetAttackPower())
+	if a2.GetHitpoints() > 0 {
+		a2.SetActionPints(a2.GetActionPints() - 1)
+		a1.SetHitpoints(a1.GetHitpoints() - a2.GetAttackPower())
+	}
+	fmt.Println("PlayerAttackMonster")
+}
+
+func (level *Level) AddEvent(event string) {
+	level.Events[level.EventPosition] = event
+	level.EventPosition++
+	if level.EventPosition == len(level.Events) {
+		level.EventPosition = 0
+	}
 }
 
 type Position struct {
@@ -66,6 +115,16 @@ type Position struct {
 
 type Entity struct {
 	Position
+	Name string
+	Rune rune
+}
+
+type Character struct {
+	Entity
+	Hitpoints    int
+	Strength     int
+	Speed        float64
+	ActionPoints float64
 }
 
 func loadLevelFromFile(fileName string) *Level {
@@ -88,8 +147,23 @@ func loadLevelFromFile(fileName string) *Level {
 		index++
 	}
 
-	level := &Level{}
+	level := &Level{
+		Player: &Player{
+			Character{
+				Entity: Entity{
+					Name: "GoMen",
+					Rune: '@',
+				},
+				Hitpoints:    20,
+				Strength:     20,
+				Speed:        1.0,
+				ActionPoints: 0,
+			}},
+		Events: make([]string, 10),
+	}
+
 	level.Map = make([][]Title, len(levelLines))
+	level.Monsters = make(map[Position]*Monster)
 	for i := range level.Map {
 		level.Map[i] = make([]Title, longestRaw)
 	}
@@ -109,9 +183,15 @@ func loadLevelFromFile(fileName string) *Level {
 				t = OpenDoor
 			case '.':
 				t = DirtFloor
-			case 'P':
+			case '@':
 				level.Player.X = x
 				level.Player.Y = y
+				t = Pending
+			case 'R':
+				level.Monsters[Position{x, y}] = NewRat(Position{x, y})
+				t = Pending
+			case 'S':
+				level.Monsters[Position{x, y}] = NewSpider(Position{x, y})
 				t = Pending
 			default:
 				panic(fmt.Sprintf(`Invalid character '%d' in map`, c))
@@ -122,17 +202,7 @@ func loadLevelFromFile(fileName string) *Level {
 	for y, row := range level.Map {
 		for x, tile := range row {
 			if tile == Pending {
-			SearchLoop:
-				for searchX := x - 1; searchX <= x+1; searchX++ {
-					for searchY := x - 1; searchY <= x+1; searchY++ {
-						var searchTile = level.Map[searchX][searchY]
-						switch searchTile {
-						case DirtFloor:
-							level.Map[y][x] = DirtFloor
-							break SearchLoop
-						}
-					}
-				}
+				level.Map[y][x] = level.bfsFloor(Position{x, y})
 			}
 		}
 	}
@@ -141,13 +211,20 @@ func loadLevelFromFile(fileName string) *Level {
 
 }
 
+func inRange(level *Level, pos Position) bool {
+	return pos.X < len(level.Map[0]) && pos.Y < len(level.Map) && pos.X >= 0 && pos.Y >= 0
+}
+
 func canWalk(level *Level, pos Position) bool {
-	switch level.Map[pos.Y][pos.X] {
-	case StoneWall, CloseDoor, Blank:
-		return false
-	default:
-		return true
+	if inRange(level, pos) {
+		switch level.Map[pos.Y][pos.X] {
+		case StoneWall, CloseDoor, Blank:
+			return false
+		default:
+			return true
+		}
 	}
+	return false
 }
 
 func checkDoor(level *Level, pos Position) {
@@ -156,36 +233,59 @@ func checkDoor(level *Level, pos Position) {
 	}
 }
 
+func (p *Player) Move(pos Position, level *Level) {
+	if monsters, ok := level.Monsters[pos]; !ok {
+		p.Position = pos
+	} else {
+		Attack(level.Player, monsters)
+		level.AddEvent("Player Attacked Monster")
+		if monsters.Hitpoints <= 0 {
+			delete(level.Monsters, monsters.Position)
+		}
+		if level.Player.Hitpoints <= 0 {
+			fmt.Println("YOU DIED")
+			panic("YOU DIED")
+		}
+	}
+}
+
 func (game *Game) handleInput(input *Input) {
-	var player = game.Level.Player
+	var (
+		level  = game.Level
+		player = level.Player
+	)
 	switch input.Type {
 	case Up:
-		if canWalk(game.Level, Position{player.X, player.Y - 1}) {
-			game.Level.Player.Y--
+		newPos := Position{player.X, player.Y - 1}
+		if canWalk(game.Level, newPos) {
+			level.Player.Move(newPos, level)
 		} else {
-			checkDoor(game.Level, Position{player.X, player.Y - 1})
+			checkDoor(game.Level, newPos)
 		}
 	case Down:
-		if canWalk(game.Level, Position{player.X, player.Y + 1}) {
-			game.Level.Player.Y++
+		newPos := Position{player.X, player.Y + 1}
+		if canWalk(game.Level, newPos) {
+			player.Move(newPos, level)
 		} else {
-			checkDoor(game.Level, Position{player.X, player.Y + 1})
+			checkDoor(game.Level, newPos)
 		}
 	case Left:
-		if canWalk(game.Level, Position{player.X - 1, player.Y}) {
-			game.Level.Player.X--
+		newPos := Position{player.X - 1, player.Y}
+		if canWalk(game.Level, newPos) {
+			player.Move(newPos, level)
 		} else {
-			checkDoor(game.Level, Position{player.X - 1, player.Y})
+			checkDoor(game.Level, newPos)
 		}
 	case Right:
-		if canWalk(game.Level, Position{player.X + 1, player.Y}) {
-			game.Level.Player.X++
+		newPos := Position{player.X + 1, player.Y}
+		if canWalk(game.Level, newPos) {
+			player.Move(newPos, level)
 		} else {
-			checkDoor(game.Level, Position{player.X + 1, player.Y})
+			checkDoor(game.Level, newPos)
 		}
 	case Search:
 		//bfs(ui, level, player.Position)
-		game.astar(player.Position, Position{3, 2})
+		level.astar(player.Position, Position{3, 2})
 	case CloseWindow:
 		close(input.LevelChannel)
 		chanIndex := 0
@@ -223,38 +323,48 @@ func getNeighbors(level *Level, pos Position) []Position {
 	return neighbors
 }
 
-func (game *Game) bfs(start Position) {
+func (level *Level) bfsFloor(start Position) Title {
 	var frontier = make([]Position, 0, 8)
 	frontier = append(frontier, start)
 	var visited = make(map[Position]bool)
 	visited[start] = true
-	game.Level.Debug = visited
+	level.Debug = visited
 
 	for len(frontier) > 0 {
 		var current = frontier[0]
+
+		var currentTile = level.Map[current.Y][current.X]
+		switch currentTile {
+		case DirtFloor:
+			return DirtFloor
+		default:
+		}
+
 		frontier = frontier[1:]
-		for _, next := range getNeighbors(game.Level, current) {
+		for _, next := range getNeighbors(level, current) {
 			if !visited[next] {
 				frontier = append(frontier, next)
 				visited[next] = true
 			}
 		}
 	}
+	return DirtFloor
 }
 
-func (game *Game) astar(start, goal Position) []Position {
+func (level *Level) astar(start, goal Position) []Position {
 	var frontier = make(pQueue, 0, 8)
 	frontier = frontier.push(start, 1)
-	//frontier = append(frontier, priorityPosition{start, 1})
 	var cameFrom = make(map[Position]Position)
 	cameFrom[start] = start
 	var costSoFor = make(map[Position]int)
 	costSoFor[start] = 0
 
-	game.Level.Debug = make(map[Position]bool)
+	//level.Debug = make(map[Position]bool)
 	var current Position
 	for len(frontier) > 0 {
+
 		frontier, current = frontier.pop()
+
 		if current == goal {
 			var path = make([]Position, 0)
 			var pos = current
@@ -269,12 +379,12 @@ func (game *Game) astar(start, goal Position) []Position {
 				path[i], path[j] = path[j], path[i]
 			}
 
-			for _, pos := range path {
-				game.Level.Debug[pos] = true
-			}
+			//for _, pos := range path {
+			//	level.Debug[pos] = true
+			//}
 			return path
 		}
-		for _, next := range getNeighbors(game.Level, current) {
+		for _, next := range getNeighbors(level, current) {
 			var newCost = costSoFor[current] + 1 // always 1 for now
 			if _, ok := costSoFor[next]; !ok || newCost < costSoFor[next] {
 				costSoFor[next] = newCost
@@ -284,6 +394,7 @@ func (game *Game) astar(start, goal Position) []Position {
 					priority = newCost + xDist + yDist
 				)
 				frontier = frontier.push(next, priority)
+				//level.Debug[next] = true
 				cameFrom[next] = current
 
 			}
@@ -302,6 +413,11 @@ func (game *Game) Run() {
 		if input.Type == QuitGame {
 			return
 		}
+
+		for _, monster := range game.Level.Monsters {
+			monster.Update(game.Level)
+		}
+
 		if input.Type == CloseWindow {
 			// TODO 	windows.Close() fd Handle in ui
 			return
